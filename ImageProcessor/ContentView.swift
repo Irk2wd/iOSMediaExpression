@@ -29,6 +29,8 @@ struct ContentView: View {
 	@State private var videoProgress: Double = 0
 	@State private var isCompressingVideo: Bool = false
 	@State private var isLoadingVideo: Bool = false
+	@State private var videoLoadProgress: Double = 0
+	@State private var videoPlayer: AVPlayer?
 
 	// 共用状态
 	@State private var statusMessage: String = ""
@@ -178,14 +180,15 @@ struct ContentView: View {
 					.frame(height: 250)
 					.overlay(
 						VStack(spacing: 12) {
-							ProgressView()
-								.scaleEffect(1.5)
-							Text("正在加载视频...")
+							ProgressView(value: videoLoadProgress)
+								.progressViewStyle(.linear)
+								.padding(.horizontal, 40)
+							Text(String(format: "正在加载视频... %.0f%%", videoLoadProgress * 100))
 								.foregroundColor(.gray)
 						}
 					)
-			} else if let url = originalVideoURL {
-				VideoPlayer(player: AVPlayer(url: url))
+			} else if let player = videoPlayer {
+				VideoPlayer(player: player)
 					.frame(height: 250)
 					.cornerRadius(12)
 
@@ -359,23 +362,41 @@ struct ContentView: View {
 	// MARK: - 视频操作
 
 	private func loadVideo() {
-		Task {
-			guard let item = selectedVideoItem else { return }
-			isLoadingVideo = true
-			statusMessage = ""
-			compressedVideoURL = nil
-			originalVideoURL = nil
-			// 将视频导出到临时文件
-			if let movie = try? await item.loadTransferable(type: VideoTransferable.self) {
-				originalVideoURL = movie.url
-				let attrs = try? FileManager.default.attributesOfItem(atPath: movie.url.path)
-				let size = attrs?[.size] as? Int64 ?? 0
-				originalVideoSizeMB = Double(size) / (1024.0 * 1024.0)
-				videoProgress = 0
-			} else {
-				statusMessage = "❌ 视频加载失败"
+		guard let item = selectedVideoItem else { return }
+		isLoadingVideo = true
+		statusMessage = ""
+		compressedVideoURL = nil
+		originalVideoURL = nil
+		videoPlayer = nil
+		videoLoadProgress = 0
+
+		let progress = item.loadTransferable(type: VideoTransferable.self) { result in
+			Task { @MainActor in
+				switch result {
+				case .success(let movie):
+					if let movie = movie {
+						originalVideoURL = movie.url
+						videoPlayer = AVPlayer(url: movie.url)
+						let attrs = try? FileManager.default.attributesOfItem(atPath: movie.url.path)
+						let size = attrs?[.size] as? Int64 ?? 0
+						originalVideoSizeMB = Double(size) / (1024.0 * 1024.0)
+						videoProgress = 0
+					} else {
+						statusMessage = "❌ 视频加载失败"
+					}
+				case .failure(let error):
+					statusMessage = "❌ 视频加载失败: \(error.localizedDescription)"
+				}
+				isLoadingVideo = false
 			}
-			isLoadingVideo = false
+		}
+
+		// 轮询加载进度
+		Task {
+			while isLoadingVideo {
+				videoLoadProgress = progress.fractionCompleted
+				try? await Task.sleep(for: .milliseconds(100))
+			}
 		}
 	}
 
