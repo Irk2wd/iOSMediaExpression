@@ -28,10 +28,12 @@ struct ContentView: View {
 	@State private var targetVideoSizeMB: String = "10"
 	@State private var videoProgress: Double = 0
 	@State private var isCompressingVideo: Bool = false
+	@State private var isLoadingVideo: Bool = false
 
 	// 共用状态
 	@State private var statusMessage: String = ""
 	@State private var showFormatInfo: Bool = false
+	@FocusState private var isInputFocused: Bool
 
 	var body: some View {
 		NavigationStack {
@@ -59,6 +61,14 @@ struct ContentView: View {
 			.navigationTitle(processMode == .image ? "图片压缩" : "视频压缩")
 			.sheet(isPresented: $showFormatInfo) {
 				FormatInfoView(mode: processMode)
+			}
+			.toolbar {
+				ToolbarItemGroup(placement: .keyboard) {
+					Spacer()
+					Button("完成") {
+						isInputFocused = false
+					}
+				}
 			}
 		}
 	}
@@ -120,6 +130,7 @@ struct ContentView: View {
 				TextField("1024", text: $targetImageSizeKB)
 					.textFieldStyle(.roundedBorder)
 					.keyboardType(.numberPad)
+					.focused($isInputFocused)
 					.frame(width: 100)
 			}
 
@@ -161,7 +172,19 @@ struct ContentView: View {
 	private var videoView: some View {
 		VStack(spacing: 20) {
 			// 视频预览
-			if let url = originalVideoURL {
+			if isLoadingVideo {
+				RoundedRectangle(cornerRadius: 12)
+					.fill(Color.gray.opacity(0.2))
+					.frame(height: 250)
+					.overlay(
+						VStack(spacing: 12) {
+							ProgressView()
+								.scaleEffect(1.5)
+							Text("正在加载视频...")
+								.foregroundColor(.gray)
+						}
+					)
+			} else if let url = originalVideoURL {
 				VideoPlayer(player: AVPlayer(url: url))
 					.frame(height: 250)
 					.cornerRadius(12)
@@ -206,6 +229,7 @@ struct ContentView: View {
 				TextField("10", text: $targetVideoSizeMB)
 					.textFieldStyle(.roundedBorder)
 					.keyboardType(.decimalPad)
+					.focused($isInputFocused)
 					.frame(width: 100)
 			}
 
@@ -337,16 +361,21 @@ struct ContentView: View {
 	private func loadVideo() {
 		Task {
 			guard let item = selectedVideoItem else { return }
+			isLoadingVideo = true
+			statusMessage = ""
+			compressedVideoURL = nil
+			originalVideoURL = nil
 			// 将视频导出到临时文件
 			if let movie = try? await item.loadTransferable(type: VideoTransferable.self) {
 				originalVideoURL = movie.url
 				let attrs = try? FileManager.default.attributesOfItem(atPath: movie.url.path)
 				let size = attrs?[.size] as? Int64 ?? 0
 				originalVideoSizeMB = Double(size) / (1024.0 * 1024.0)
-				compressedVideoURL = nil
-				statusMessage = ""
 				videoProgress = 0
+			} else {
+				statusMessage = "❌ 视频加载失败"
 			}
+			isLoadingVideo = false
 		}
 	}
 
